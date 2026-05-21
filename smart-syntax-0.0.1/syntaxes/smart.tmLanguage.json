@@ -1,0 +1,106 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "SMART-HOME",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#identifiers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.smart",
+          "match": "//.*"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.smart",
+          "match": "\\b(?i:WHEN|IF|THEN|ELSE|DO|END|EVERY)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.smart",
+          "match": "\\b(?i:AND|OR|NOT)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.smart",
+          "match": "==|!=|>=|<=|>|<"
+        },
+        {
+          "name": "keyword.operator.assignment.smart",
+          "match": "="
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.smart",
+          "match": "\\b(?i:TRUE|FALSE|ON|OFF)\\b"
+        },
+        {
+          "name": "constant.numeric.temperature.smart",
+          "match": "-?\\d+°C"
+        },
+        {
+          "name": "constant.numeric.decimal.smart",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.smart",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.smart",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "support.variable.sensor.smart",
+          "match": "\\b(sensor_temp|sensor_humedad|sensor_luz|sensor_movimiento|sensor_humo)_[a-zA-Z0-9_]+\\b"
+        },
+        {
+          "name": "support.variable.actuator.smart",
+          "match": "\\b(foco|aire|persiana|cerradura|reloj|altavoz|alarma)_[a-zA-Z0-9_]+\\b"
+        },
+        {
+          "name": "variable.other.property.smart",
+          "match": "\\.(estado|brillo|color|modo|temp_obj|temp_act|posicion|hora|volumen|mute|fecha|mensaje|email_notif|activada)\\b"
+        }
+      ]
+    }
+  },
+  "scopeName": "source.smart"
+}

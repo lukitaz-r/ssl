@@ -1,0 +1,26 @@
+{
+  "name": "smart-syntax",
+  "displayName": "SMART-HOME Language Support",
+  "description": "Syntax highlighting and language support for the SMART-HOME DSL (.smart)",
+  "version": "0.0.1",
+  "publisher": "lucad",
+  "engines": {
+    "vscode": "^1.50.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "smart",
+      "aliases": ["SMART-HOME", "smart"],
+      "extensions": [".smart"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "smart",
+      "scopeName": "source.smart",
+      "path": "./syntaxes/smart.tmLanguage.json"
+    }]
+  }
+}

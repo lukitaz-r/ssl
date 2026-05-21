@@ -1,0 +1,14 @@
+sensor_temp_1.temp_act = 45°C
+foco_sala.color = "rojo"
+
+// Regla de temperatura extrema
+WHEN sensor_temp_1.temp_act >= 35°C AND foco_sala.color == "azul" DO
+    IF sensor_movimiento_sala.estado == TRUE THEN
+        aire_sala.temp_obj = 20°C
+        aire_sala.estado = ON
+        foco_sala.color = "azul"
+    ELSE
+        persiana_sala.estado = OFF
+        alarma_casa.estado = ON
+    END
+END
