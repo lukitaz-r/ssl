@@ -131,167 +131,163 @@ La clase **`ParserSmartHome`** valida el orden de los tokens y construye el AST.
 
 * **`main()`:** Controla el ciclo de vida del script desde la consola. Valida argumentos de la línea de comandos, verifica que el archivo de entrada posea la extensión `.smart`, abre y decodifica el código fuente, ejecuta el Lexer y el Parser, maneja excepciones capturando los errores de sintaxis y escribe la salida compilada en `resultado_smart_home.html`.
 
+### 4.5. Justificación Teórica: Simulación AFND vs. Caché AFD
+
+La decisión de implementar ambos enfoques (la simulación directa de un **Autómata Finito No Determinista - AFND** y la caché de un **Autómata Finito Determinista - AFD**) responde a un compromiso de diseño clásico en ciencias de la computación entre **tiempo de ejecución**, **consumo de memoria** y **soporte de características**:
+
+#### 1. Simulación AFND (Algoritmo de Thompson)
+
+* **Cómo funciona**: Mantiene de manera simultánea una lista con todos los estados activos en los que se encuentra el autómata. Por cada carácter del texto de entrada, calcula el siguiente conjunto de estados activos.
+* **Ventajas**:
+  * **Uso de memoria extremadamente bajo**: No guarda ninguna tabla de transiciones calculadas; solo requiere dos listas de estados de tamaño máximo proporcional al número de nodos del autómata ($O(m)$).
+  * **Soporte de aserciones contextuales (`\b`, `^`, `$`)**: Al evaluar el autómata dinámicamente paso a paso, puede verificar condiciones del entorno del carácter actual (como si el carácter previo es alfanumérico y el actual no) de manera directa y exacta.
+* **Desventajas**:
+  * Más lento en la práctica para textos largos, ya que por cada carácter leído se debe iterar sobre la lista de estados activos y seguir sus ramificaciones (costo por carácter de $O(m)$).
+
+#### 2. Caché AFD (Construcción sobre la marcha)
+
+* **Cómo funciona**: En lugar de recalcular el conjunto de estados AFND activos para un carácter en cada paso, el motor trata cada conjunto único de estados AFND como si fuera un único **estado del AFD**. Almacena estos estados y sus transiciones en una caché (árbol binario) a medida que son descubiertos.
+* **Ventajas**:
+  * **Velocidad máxima**: Una vez calculada una transición para un carácter en un estado determinado, las siguientes veces se procesa en tiempo constante $O(1)$ mediante un simple acceso a la tabla `next_state = current_state->next[char]`.
+* **Desventajas**:
+  * **Explosión de estados**: Teóricamente, un AFND de $n$ estados puede producir un AFD de hasta $2^n$ estados en el peor de los casos. Si bien en la práctica esto rara vez ocurre de forma completa, puede agotar la memoria en expresiones regulares complejas o textos largos.
+  * **Incompatibilidad con aserciones contextuales**: Dado que las transiciones de las aserciones (como `\b`) dependen del contexto de la cadena y no puramente del carácter de entrada, no es posible cachear de forma estática una transición de estado AFD basándose únicamente en el carácter actual.
+
+#### Resumen de Diseño
+
+Implementar ambos mecanismos proporciona **lo mejor de ambos mundos**:
+
+* Se usa la **Caché AFD** para expresiones regulares estándar (como números, textos o espacios en blanco) para lograr velocidades de escaneo de texto nativas y óptimas ($O(1)$ por carácter).
+* Se recurre a la **Simulación AFND** como respaldo seguro cuando la memoria se agota (pudiendo vaciar la caché del AFD y continuar) o cuando la expresión regular requiere aserciones contextuales avanzadas como límites de palabras (`\b`), garantizando la corrección matemática de la coincidencia en cualquier escenario.
+
+#### Ejemplo Visual: Procesamiento de `a(bb)+a`
+
+Para ilustrar de forma gráfica la diferencia entre la **Simulación AFND** y la **Caché AFD**, consideremos la expresión regular `a(bb)+a` al evaluar la cadena `abba`:
+
+##### 1. Representación del AFND (Autómata Finito No Determinista - Algoritmo de Thompson)
+
+En el AFND, múltiples estados y transiciones no deterministas (como transiciones vacías $\varepsilon$) pueden estar activos simultáneamente. Al procesar `abba`, el motor rastrea el conjunto de estados activos en paralelo.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> s0 : Inicio
+    s0 --> s1 : 'a'
+    s1 --> s2 : ε
+    s2 --> s3 : 'b'
+    s3 --> s4 : 'b'
+    s4 --> s2 : ε (bucle)
+    s4 --> s5 : ε
+    s5 --> s6 : 'a'
+    s6 --> [*] : Aceptación (Match)
+```
+
+* **Flujo de ejecución para `abba` en AFND**:
+  * **Inicio**: Estado activo inicial: `{s0}`.
+  * **Leer 'a'**: Transiciona de `s0` a `s1`. Mediante la clausura $\varepsilon$, los estados activos se expanden a `{s1, s2}`.
+  * **Leer 'b'**: Transiciona a `{s3}`.
+  * **Leer 'b'**: Transiciona a `s4`. Mediante la clausura $\varepsilon$, los estados activos se expanden a `{s2, s5}`.
+  * **Leer 'a'**: Desde `s5`, transiciona a `{s6}` (Estado de Aceptación). Como `{s6}` es un estado de aceptación, la cadena coincide.
+
+---
+
+##### 2. Representación del AFD (Autómata Finito Determinista) generado en la Caché
+
+En la Caché AFD, cada subconjunto único de estados AFND activos se almacena y trata como un único **Estado del AFD**. Las transiciones se determinan a medida que se leen los caracteres y se guardan para futuros accesos en tiempo constante $O(1)$.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> A : Estado A\n{s0}
+    A --> B : 'a'\nEstado B\n{s2}
+    B --> C : 'b'\nEstado C\n{s3}
+    C --> D : 'b'\nEstado D\n{s2, s5}
+    D --> C : 'b'
+    D --> E : 'a'\nEstado E\n{s6} (Aceptación)
+```
+
+* **Flujo de ejecución para `abba` en la Caché AFD**:
+  * **Inicio (Estado A)**: Representa el conjunto de inicio `{s0}`.
+  * **Leer 'a' (Estado B)**: Se calcula la transición al conjunto `{s2}` y se guarda en la caché.
+  * **Leer 'b' (Estado C)**: Se calcula la transición al conjunto `{s3}` y se guarda.
+  * **Leer 'b' (Estado D)**: Se calcula la transición al conjunto `{s2, s5}` y se guarda.
+  * **Leer 'a' (Estado E)**: Se calcula la transición al conjunto `{s6}` (Aceptación) y se guarda.
+  * *Si se procesaran más caracteres, por ejemplo `abbbba`, la transición desde el Estado D con 'b' vuelve directamente al Estado C, utilizando la transición ya guardada en caché sin necesidad de simular el AFND de nuevo.*
+
 ---
 
 ## 5. Explicación Detallada Línea por Línea
 
-A continuación, se presenta una disección paso a paso del código del script para comprender su funcionamiento a bajo nivel.
+A continuación, se analiza paso a paso el código de los archivos del proyecto para comprender su funcionamiento de bajo nivel.
 
-### 5.1. Definición de Tokens y Regex (Líneas 1-21)
+### 5.1. La explicación del sistema de regex.py
 
-```python
-import re
-import sys
-```
+El archivo `regex.py` es nuestra librería modular de expresiones regulares basada en autómatas.
 
-* **Línea 1-2:** Se importan los módulos de expresiones regulares (`re`) y acceso al sistema (`sys`).
-* **Líneas 4-18 (`patrones`):** Es un mapa clave-valor. Las claves representan las categorías léxicas que necesita el compilador. Los valores son expresiones regulares crudas (`r'...'`).
-* `\b(...)` y `\b` aseguran límites de palabra exactos para que palabras similares no se traslapen (por ejemplo, evitar que la palabra `EVERYDAY` sea capturada como la reservada `EVERY`).
-* En `ACTUADOR` y `SENSOR`, el sufijo `_[a-zA-Z0-9_]+\b` obliga a que todos los dispositivos tengan un nombre específico separado por guion bajo, por ejemplo: `foco_dormitorio`.
-* En `ATRIBUTO`, el prefijo `\.` busca el carácter de punto de manera literal.
-* En `TEMPERATURA`, `-?\d+°C` detecta números positivos o negativos que terminan en el carácter especial de grados Celsius.
-* **Líneas 20-21:**
+#### A. Clases Predicados y Aserciones (Líneas 10-91)
 
-    ```python
-    reg_comp = '|'.join(f'(?P<{nombre}>{patron})' for nombre, patron in patrones.items())
-    analizador = re.compile(reg_comp, re.IGNORECASE)
-    ```
+* **`LiteralMatcher` (Línea 11)**: Clase para coincidencias de caracteres individuales. Su método `__call__` compara el carácter con el esperado, soportando opcionalmente insensibilidad a mayúsculas/minúsculas (`ignore_case`).
+* **`DigitMatcher` (Línea 20), `WhitespaceMatcher` (Línea 26), `WordMatcher` (Línea 32), `DotMatcher` (Línea 38)**: Callables simples que retornan verdadero utilizando métodos integrados de Python (`char.isdigit()`, `char.isspace()`, etc.).
+* **`WordBoundaryAssertion` (Línea 44)**: Clase marcador para aserciones de límite de palabra (`\b`). No consume caracteres en sí misma.
+* **`CharClassMatcher` (Línea 48)**: Parsea grupos como `[a-zA-Z0-9_]` o `[^"]` recopilando rangos de caracteres y literales individuales en sets de búsqueda rápida. Sostiene la lógica de negación si inicia con el carácter `'^'`.
 
-    Se concatenan todas las expresiones usando el operador de alternancia de regex (`|`). Cada una se envuelve bajo un grupo con nombre `(?P<NombreGrupo>...)`. Finalmente, se compila la expresión unificada con la bandera `re.IGNORECASE` para que el analizador no discrimine entre mayúsculas y minúsculas durante el análisis léxico.
+#### B. Tokenización y Conversión Posfija (Líneas 94-222)
 
-### 5.2. Función del Lexer (Líneas 23-43)
+* **`tokenize_regex(re_str)` (Línea 94)**: Tokeniza la cadena de entrada en una lista de objetos atomizados. Detecta secuencias de escape (como `\d`, `\s`, `\w`, `\b`) y clases de caracteres de corchetes `[...]`, convirtiendo todos los demás caracteres comunes en `LiteralMatcher` para evitar que colisionen con los operadores propios del motor.
+* **`re2post(infix_atoms)` (Línea 139)**: Implementa el algoritmo de Shunting-yard simplificado para convertir la lista de átomos a una notación posfija (RNP) insertando explícitamente el operador de concatenación `.` cuando dos átomos son consecutivos.
 
-```python
-def lexer_smart_home(codigo):
-    tokens = []
-    for match in analizador.finditer(codigo):
-        tipo = match.lastgroup
-        valor = match.group(tipo)
-```
+#### C. Compilación de NFA (Líneas 225-285)
 
-* **Líneas 23-27:** Se inicializa una lista vacía para almacenar los tokens y se itera sobre todas las coincidencias encontradas por el motor regex en el código fuente. `match.lastgroup` retorna el nombre del grupo coincidente (por ejemplo, `'RESERVADA'`), y `match.group(tipo)` devuelve el texto original capturado.
-* **Líneas 29-31:**
+* **`State` (Línea 225)**: Representa un nodo en la red de transiciones del autómata, con una propiedad `c` para el carácter o predicado esperado, y `out`/`out1` para las transiciones salientes.
+* **`post2nfa(postfix_atoms)` (Línea 246)**: Recorre los átomos en notación posfija usando una pila de fragmentos. Para literales crea estados simples, y para operadores como `*`, `+`, `?` y `|` extrae fragmentos de la pila, altera sus enlaces de transición y vuelve a apilar el fragmento combinado.
 
-    ```python
-    if tipo in ['ESPACIO', 'COMENTARIO']:
-        continue
-    ```
+#### D. Simulación del NFA y Maximal Munch (Líneas 288-372)
 
-    Si el token es un espacio en blanco o un comentario (líneas que inician con `//`), se descarta silenciosamente de la lista que irá al parser, cumpliendo con la regla de omitir elementos de formateo.
-* **Líneas 33-37:**
+* **`addstate(lst, s, string, index)` (Línea 296)**: Agrega de forma recursiva un estado al conjunto actual. Sigue las transiciones vacías (Split) y evalúa dinámicamente las aserciones `\b` contrastando los caracteres circundantes en los límites de `string` en la posición `index`.
+* **`step(clist, char, nlist, string, index, ignore_case)` (Línea 340)**: Toma los estados activos (`clist`) y, si coinciden con `char` (evaluando los matchers callables de manera insensible a mayúsculas/minúsculas si corresponde), avanza la transición y agrega el siguiente estado a `nlist` en la posición `index + 1`.
+* **`match_longest_prefix(start, string, ignore_case)` (Línea 375)**: Motor de tokenización. Simula el NFA recorriendo la cadena y registra el índice más alto donde el conjunto de estados activos contenga el estado de coincidencia (`Match`). Detiene la simulación si la lista de estados se vacía.
 
-    ```python
-    pos = match.start()
-    linea = codigo.count('\n', 0, pos) + 1
-    ultima_nueva_linea = codigo.rfind('\n', 0, pos)
-    columna = pos + 1 if ultima_nueva_linea == -1 else pos - ultima_nueva_linea
-    ```
+#### E. Caché del DFA y Árbol de Estados (Líneas 396-484)
 
-    Cálculo de la posición exacta en la cuadrícula de texto del archivo:
-* Se cuenta cuántos saltos de línea (`\n`) existen desde el inicio del documento hasta la posición donde arranca el token actual para calcular la `linea`.
-* Se encuentra la posición absoluta del último salto de línea anterior al token (`ultima_nueva_linea`).
-* La columna se obtiene restando la posición de inicio del token menos la del último salto de línea.
-* **Líneas 39-42:**
+* **`DState` (Línea 396)**: Nodo de caché de estado DFA que envuelve un conjunto ordenado de estados NFA.
+* **`dstate(lst)` (Línea 427)**: Busca y recupera un `DState` existente en la estructura de árbol binario ordenando el conjunto por los IDs de memoria de Python para garantizar búsquedas y ordenamientos deterministas. Crea uno nuevo si no existe.
 
-    ```python
-    if tipo == 'RESERVADA' or tipo == 'LOGICO' or tipo == 'BOOLEANO':
-        valor = valor.upper()
-    tokens.append((tipo, valor, linea, columna))
-    ```
+---
 
-    Se normalizan los tokens lógicos, booleanos y palabras reservadas pasándolos a mayúsculas para un análisis posterior más simple, y se añade la tupla completa a la colección.
+### 5.2. La explicación del main.py
 
-### 5.3. Estructura y Métodos Base del Parser (Líneas 45-83)
+El script `main.py` coordina el flujo completo de compilación del lenguaje SMART-HOME.
 
-```python
-class ParserSmartHome:
-    def __init__(self, tokens, codigo=""):
-        self.tokens = tokens
-        self.codigo = codigo
-        self.pos = 0
-```
+#### A. Definición de Patrones e Importación (Líneas 1-18)
 
-* **Líneas 45-49:** Constructor que recibe la lista de tokens entregados por el Lexer y almacena la posición de rastreo actual en `0`.
-* **Líneas 51-52 (`token_actual`):** Método de consulta no destructiva que devuelve la tupla del token actual sin avanzar el puntero, o `None` si ya no quedan más tokens por consumir.
-* **Líneas 54-67 (`obtener_posicion_error`):** Retorna la tupla `(linea, columna)` para indicar exactamente dónde falló el procesamiento del parser. Maneja tres casos alternativos: si el puntero está sobre un token válido, si el archivo finalizó abruptamente (calcula sobre el final de la cadena de código) o si recurre al último token guardado.
-* **Líneas 69-83 (`consumir`):**
+* **Línea 1**: Se importa la nueva librería personalizada de expresiones regulares `regex` en lugar de la librería estándar de Python `re`.
+* **Líneas 4-18 (`patrones`)**: Diccionario que especifica las expresiones regulares de los tokens para la gramática SMART-HOME (por ejemplo, actuadores, sensores, atributos y operadores de comparación).
 
-    ```python
-    def consumir(self, tipo_esperado, valor_esperado=None):
-        token = self.token_actual()
-        if token and token[0] == tipo_esperado:
-            if valor_esperado and token[1] != valor_esperado:
-                # Error por valor incorrecto
-                ...
-            self.pos += 1
-            return token
-        # Error por tipo incorrecto o fin de archivo abrupto
-        ...
-    ```
+#### B. Compilación de Patrones (Líneas 21-29)
 
-    Es el núcleo de validación sintáctica del parser LL(1). Compara el token actual contra el tipo esperado. Si coincide (y opcionalmente coincide su valor de texto), incrementa `self.pos` en `1` para avanzar el puntero de análisis y retorna el token consumido. De lo contrario, interrumpe el flujo arrojando una excepción `SyntaxError` descriptiva.
+* **Líneas 21-29**: Recorre todos los patrones definidos y los compila en autómatas NFA individuales en tiempo de carga mediante:
 
-### 5.4. Métodos Gramaticales Auxiliares (Líneas 84-164)
+  ```python
+  infix = regex.tokenize_regex(patron)
+  post = regex.re2post(infix)
+  start_state = regex.post2nfa(post)
+  compiled_patrones[nombre] = start_state
+  ```
 
-* **Líneas 86-102 (`identificador`):**
-    Este método procesa variables físicas. Espera obligatoriamente un token de tipo `SENSOR` o `ACTUADOR`. Luego de consumirlo, inspecciona si el siguiente token es un `ATRIBUTO` (ej: `.estado`). Si existe, consume el atributo y devuelve un nodo estructurado como: `{"dispositivo": "nombre", "atributo": ".propiedad"}`.
-* **Líneas 104-131 (`condicion`):**
-    Analiza expresiones condicionales. Consume el lado izquierdo (`identificador`), consume un token operador de `COMPARACION` (como `==`, `>=`, etc.) y luego consume el lado derecho (que puede ser un valor `NUMERICO`, `TEMPERATURA`, `BOOLEANO`, `TEXTO` u otro `identificador`).
-* **Líneas 125-130:** Si el token posterior es un operador `LOGICO` (`AND` / `OR`), se auto-invoca recursivamente para formar árboles lógicos anidados (`tipo: "operacion_logica"`).
-* **Líneas 133-139 (`lista_acciones`):**
-    Itera recopilando múltiples expresiones de acciones en una lista. Rompe el bucle únicamente cuando detecta que el siguiente token es una palabra reservada que delimita el fin de la estructura (como `END` o `ELSE`).
-* **Líneas 141-147 (`accion`):**
-    Determina si la acción a procesar es un bloque condicional interno `IF` o una operación de asignación de variables.
-* **Líneas 149-163 (`asignacion`):**
-    Valida asignaciones directas del tipo `<identificador> = <literal>`. Consume el identificador del dispositivo a modificar, el operador de asignación `=` y el literal asignado, validando tipos de datos estándar.
+  Esto optimiza la velocidad al evitar recompilar las expresiones durante la tokenización.
 
-### 5.5. Reglas Lógicas de Bloques Principales (Líneas 165-217)
+#### C. Analizador Léxico con Maximal Munch (Líneas 31-64)
 
-* **Líneas 167-179 (`bloque_when`):**
-    Es el disparador de eventos de primer nivel. Valida estrictamente la estructura:
-    1. Consume `'WHEN'`.
-    2. Invoca el método `condicion()` para parsear la lógica del disparador.
-    3. Consume `'DO'`.
-    4. Procesa y almacena la lista de acciones internas mediante `lista_acciones()`.
-    5. Consume `'END'`.
-    Retorna un diccionario estructurado del bloque.
-* **Líneas 181-201 (`condicional`):**
-    Valida la bifurcación lógica:
-    1. Consume `'IF'`.
-    2. Procesa la `condicion()`.
-    3. Consume `'THEN'`.
-    4. Procesa la lista de acciones del bloque verdadero.
-    5. Evalúa si el token siguiente es un `'ELSE'`. De ser así, lo consume y procesa su correspondiente lista de acciones alternativas.
-    6. Consume `'END'`.
-* **Líneas 203-217 (`programa`):**
-    Itera analizando tokens recursivamente hasta vaciar la lista de entrada. Reconoce los puntos de partida de los bloques principales: `WHEN` y condicionales `IF` a nivel raíz, devolviendo el listado completo de nodos que representan el AST del archivo.
+* **Líneas 31-33**: `lexer_smart_home` recibe el código plano. Define una variable `pos = 0` y corre un bucle hasta procesar todo el archivo.
+* **Líneas 36-43**: En cada posición del puntero, toma el fragmento restante del código (`sub = codigo[pos:]`) y evalúa cuál de las expresiones precompiladas tiene el prefijo coincidente más largo ejecutando `regex.match_longest_prefix(start_state, sub, ignore_case=True)`.
+* **Líneas 45-48**: Si ningún autómata coincide, avanza `pos` un paso para omitir caracteres no reconocidos.
+* **Líneas 50-61**: Si hay una coincidencia exitosa, extrae el lexema (`valor`). Si no es un espacio en blanco o comentario, calcula la línea y columna mediante la cuenta de saltos de línea y actualiza la lista de tokens, normalizando palabras reservadas a mayúsculas. Finalmente avanza `pos` según el largo de la coincidencia.
 
-### 5.6. Formateo y Renderización HTML (Líneas 219-333)
+#### D. Analizador Sintáctico y Transpilación (Líneas 66-371)
 
-* **Líneas 221-228 (`formatear_identificador`):** Convierte la representación estructurada de un dispositivo y atributo en una única cadena de texto legible (ej: `"sensor_temp_1.temp_act"`).
-* **Líneas 230-246 (`formatear_condicion`):** Genera código HTML formateado con estilos CSS en línea para colorear dinámicamente las condiciones del sistema. Si detecta operaciones lógicas como `AND` u `OR`, las formatea recursivamente envolviendo los sub-bloques entre paréntesis para clarificar la precedencia visual.
-* **Líneas 250-304 (`procesar_nodos`):** Toma una lista de nodos del AST y los convierte a HTML mediante plantillas dinámicas:
-* **Asignaciones (Líneas 256-262):** Crea un bloque blanco con un borde izquierdo verde de `4px` y el icono `➔` indicando cambio de configuración.
-* **Condicionales (Líneas 265-285):** Genera bloques con fondo amarillo pálido (`#fef9e7`) y borde izquierdo naranja (`#f39c12`), anidando visualmente las acciones del `THEN` y el `ELSE`.
-* **Bloques WHEN (Líneas 287-302):** Crea paneles destacados con fondo azul claro (`#ebf5fb`), bordes definidos, sombras suaves (`box-shadow`), un icono de energía `⚡` y un título claro para denotar el disparador de eventos global.
-* **Líneas 306-333 (`generar_html`):** Ensambla el reporte HTML completo. Declara el `DOCTYPE`, establece codificación UTF-8 para evitar problemas con caracteres especiales (como `°C` o acentos), aplica una tipografía moderna (`Arial, sans-serif`), restringe el ancho máximo de lectura a `800px` para mejorar la legibilidad y renderiza la salida en un panel central estilizado.
-
-### 5.7. Orquestador Principal CLI (Líneas 335-369)
-
-```python
-def main():
-    if len(sys.argv) > 1:
-        archivo = sys.argv[1]
-        if ".smart" in archivo:
-            try:
-                # Apertura, ejecución de Lexer y Parser, transpilación y guardado
-                ...
-```
-
-* **Líneas 337-340:** Evalúa si se pasó una ruta de archivo como argumento en la terminal (`sys.argv`). Comprueba que el archivo cuente con la extensión obligatoria `.smart`.
-* **Líneas 341-359:** Intenta leer el archivo utilizando codificación UTF-8, ejecuta secuencialmente el Lexer y el Parser, procesa el AST resultante para generar el código HTML compilado, escribe el resultado final en el archivo de salida `resultado_smart_home.html` en el mismo directorio e imprime un mensaje de éxito.
-* **Líneas 360-361:** Captura los errores de sintaxis (`SyntaxError`) generados durante el análisis léxico o sintáctico y los imprime en la consola de manera amigable para guiar la depuración del código fuente.
-* **Líneas 362-366:** Imprime advertencias en consola en caso de parámetros incorrectos, como extensiones de archivo inválidas o la ausencia de argumentos.
+* **Líneas 66-218 (`ParserSmartHome`)**: Valida que la lista de tokens cumpla con las reglas gramaticales mediante descenso recursivo (métodos `programa()`, `bloque_when()`, `condicional()`, etc.), construyendo el Árbol de Sintaxis Abstracta (AST).
+* **Líneas 221-333**: Generadores y formateadores visuales recursivos (`formatear_condicion`, `procesar_nodos`, `generar_html`) que transforman los nodos del AST en bloques visuales estructurados con estilos CSS integrados para generar la salida interactiva.
+* **Líneas 337-371 (`main`)**: Abre el archivo `.smart`, ejecuta los análisis correspondientes y escribe el código HTML resultante en `resultado_smart_home.html`, capturando e informando amigablemente cualquier excepción sintáctica detectada.
 
 ---
 
@@ -469,34 +465,3 @@ La consola permite compilar un patrón de expresión regular y probarlo inmediat
 
 > [!NOTE]
 > Dado que la aserción de límite de palabra `\b` es contextual, requiere conocer la cadena de entrada completa en tiempo de ejecución. Si se invoca la caché DFA (`-d`) sobre una expresión regular que contenga `\b`, el programa detectará automáticamente la aserción y cambiará a la simulación NFA (`-n`) de manera segura, emitiendo un aviso informativo por pantalla.
-
----
-
-### 8.4. Justificación Teórica: Simulación AFND vs. Caché AFD
-
-La decisión de implementar ambos enfoques (la simulación directa de un **Autómata Finito No Determinista - AFND** y la caché de un **Autómata Finito Determinista - AFD**) responde a un compromiso de diseño clásico en ciencias de la computación entre **tiempo de ejecución**, **consumo de memoria** y **soporte de características**:
-
-#### 1. Simulación AFND (Algoritmo de Thompson)
-
-* **Cómo funciona**: Mantiene de manera simultánea una lista con todos los estados activos en los que se encuentra el autómata. Por cada carácter del texto de entrada, calcula el siguiente conjunto de estados activos.
-* **Ventajas**:
-  * **Uso de memoria extremadamente bajo**: No guarda ninguna tabla de transiciones calculadas; solo requiere dos listas de estados de tamaño máximo proporcional al número de nodos del autómata ($O(m)$).
-  * **Soporte de aserciones contextuales (`\b`, `^`, `$`)**: Al evaluar el autómata dinámicamente paso a paso, puede verificar condiciones del entorno del carácter actual (como si el carácter previo es alfanumérico y el actual no) de manera directa y exacta.
-* **Desventajas**:
-  * Más lento en la práctica para textos largos, ya que por cada carácter leído se debe iterar sobre la lista de estados activos y seguir sus ramificaciones (costo por carácter de $O(m)$).
-
-#### 2. Caché AFD (Construcción sobre la marcha)
-
-* **Cómo funciona**: En lugar de recalcular el conjunto de estados AFND activos para un carácter en cada paso, el motor trata cada conjunto único de estados AFND como si fuera un único **estado del AFD**. Almacena estos estados y sus transiciones en una caché (árbol binario) a medida que son descubiertos.
-* **Ventajas**:
-  * **Velocidad máxima**: Una vez calculada una transición para un carácter en un estado determinado, las siguientes veces se procesa en tiempo constante $O(1)$ mediante un simple acceso a la tabla `next_state = current_state->next[char]`.
-* **Desventajas**:
-  * **Explosión de estados**: Teóricamente, un AFND de $n$ estados puede producir un AFD de hasta $2^n$ estados en el peor de los casos. Si bien en la práctica esto rara vez ocurre de forma completa, puede agotar la memoria en expresiones regulares complejas o textos largos.
-  * **Incompatibilidad con aserciones contextuales**: Dado que las transiciones de las aserciones (como `\b`) dependen del contexto de la cadena y no puramente del carácter de entrada, no es posible cachear de forma estática una transición de estado AFD basándose únicamente en el carácter actual.
-
-#### Resumen de Diseño
-
-Implementar ambos mecanismos proporciona **lo mejor de ambos mundos**:
-
-* Se usa la **Caché AFD** para expresiones regulares estándar (como números, textos o espacios en blanco) para lograr velocidades de escaneo de texto nativas y óptimas ($O(1)$ por carácter).
-* Se recurre a la **Simulación AFND** como respaldo seguro cuando la memoria se agota (pudiendo vaciar la caché del AFD y continuar) o cuando la expresión regular requiere aserciones contextuales avanzadas como límites de palabras (`\b`), garantizando la corrección matemática de la coincidencia en cualquier escenario.
