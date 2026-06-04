@@ -1,4 +1,4 @@
-import re
+import regex # type: ignore
 import sys
 
 patrones = {
@@ -11,35 +11,57 @@ patrones = {
     'ATRIBUTO': r'\.(estado|brillo|color|modo|temp_obj|temp_act|posicion|hora|volumen|mute|fecha|mensaje|email_notif|activada)\b', 
     'COMPARACION': r'==|!=|>=|<=|>|<', 
     'ASIGNACION': r'=', 
-    'TEMPERATURA': r'-?\d+°C', 
+    'TEMPERATURA': r'-?\d+°C',
     'TEXTO': r'"[^"]*"', 
     'NUMERICO': r'\d+',
     'ESPACIO': r'\s+'
 }
 
-reg_comp = '|'.join(f'(?P<{nombre}>{patron})' for nombre, patron in patrones.items())
-analizador = re.compile(reg_comp, re.IGNORECASE)
+# Precompilar los patrones usando nuestro propio motor de regex
+compiled_patrones = {}
+for nombre, patron in patrones.items():
+    infix = regex.tokenize_regex(patron)
+    post = regex.re2post(infix)
+    start_state = regex.post2nfa(post)
+    if start_state is None:
+        raise RuntimeError(f"Error al compilar el patrón {nombre}: {patron}")
+    compiled_patrones[nombre] = start_state
 
-def lexer_smart_home(codigo):
+def lexer_smart_home(codigo: str) -> list:
     tokens = []
-    for match in analizador.finditer(codigo):
-        tipo = match.lastgroup
-        valor = match.group(tipo)
+    pos = 0
+    n = len(codigo)
+    while pos < n:
+        sub = codigo[pos:]
+        longest_len = -1
+        best_name = None
         
-        # Ignoramos espacios y comentarios 
-        if tipo in ['ESPACIO', 'COMENTARIO']:
+        # Buscar la coincidencia más larga (Maximal Munch) en la posición actual
+        for nombre, start_state in compiled_patrones.items():
+            length = regex.match_longest_prefix(start_state, sub, ignore_case=True)
+            if length > longest_len:
+                longest_len = length
+                best_name = nombre
+                
+        if longest_len <= 0:
+            # Si no coincide ningún token, avanzamos un carácter
+            pos += 1
             continue
             
-        # Calcular línea y columna
-        pos = match.start()
-        linea = codigo.count('\n', 0, pos) + 1
-        ultima_nueva_linea = codigo.rfind('\n', 0, pos)
-        columna = pos + 1 if ultima_nueva_linea == -1 else pos - ultima_nueva_linea
+        valor = sub[:longest_len]
+        
+        # Ignoramos espacios y comentarios
+        if best_name not in ('ESPACIO', 'COMENTARIO'):
+            linea = codigo.count('\n', 0, pos) + 1
+            ultima_nueva_linea = codigo.rfind('\n', 0, pos)
+            columna = pos + 1 if ultima_nueva_linea == -1 else pos - ultima_nueva_linea
             
-        # Normalizamos las palabras reservadas a mayúsculas
-        if tipo == 'RESERVADA' or tipo == 'LOGICO' or tipo == 'BOOLEANO':
-            valor = valor.upper()
-        tokens.append((tipo, valor, linea, columna))
+            # Normalizar las palabras reservadas a mayúsculas
+            if best_name in ('RESERVADA', 'LOGICO', 'BOOLEANO'):
+                valor = valor.upper()
+            tokens.append((best_name, valor, linea, columna))
+            
+        pos += longest_len
     return tokens
 
 class ParserSmartHome:
@@ -223,7 +245,7 @@ def formatear_identificador(identificador):
     if isinstance(identificador, dict) and "dispositivo" in identificador:
         texto = identificador["dispositivo"]
         if identificador.get("atributo"):
-            texto += f".{identificador['atributo']}"
+            texto += f"{identificador['atributo']}"
         return texto
     return str(identificador)
 
@@ -334,7 +356,7 @@ def generar_html(ast):
 
 # --- SCRIPT DE PRUEBA ---
 
-def main():
+def main() -> None:
     if len(sys.argv) > 1:
         archivo = sys.argv[1]
         if ".smart" in archivo:
@@ -356,6 +378,7 @@ def main():
                 # 5. Guardar archivo
                 with open("resultado_smart_home.html", "w", encoding="utf-8") as archivo:
                     archivo.write(resultado_html)
+                
                 print("¡Éxito! Abre 'resultado_smart_home.html' en tu navegador.")
             except SyntaxError as e:
                 print(f"Error detectado por el Parser: {e}")
@@ -363,6 +386,7 @@ def main():
             print(f"El archivo debe tener la extensión: .smart")
     else: 
         print(f"Se debe proporcionar un archivo para compilar!")
-main()
 
+if __name__ == "__main__":
+    main()
 

@@ -393,3 +393,110 @@ Si desea probar y modificar las reglas de resaltado en tiempo real sin necesidad
 3. Presione la tecla **`F5`** (o vaya a la pestaña de "Run and Debug" en el menú lateral y haga clic en el botón de Play verde que dice *"Launch Extension"*).
 4. Se abrirá una nueva ventana especial de VS Code llamada **"[Extension Development Host]"** (Anfitrión de Desarrollo de Extensiones).
 5. En esta nueva ventana, cree o abra cualquier archivo que termine en `.smart` (por ejemplo, `test.smart`). Podrá probar el resaltado de sintaxis y ver cómo responde el editor a las reglas definidas.
+
+---
+
+## 8. Motor de Expresiones Regulares Personalizado (AFND/AFD)
+
+Para cumplir con los objetivos académicos y prácticos de la materia **Sintaxis y Semántica de los Lenguajes (SSL)**, se ha diseñado y desarrollado un motor de expresiones regulares propio basado en las teorías formalizadas por **Ken Thompson** en su artículo de 1968 [Programming Techniques: Regular expression search algorithm](https://dl.acm.org/doi/10.1145/363347.363387) para CACM y detalladas por Russ Cox en *[Regular Expression Matching Can Be Simple And Fast](https://swtch.com/~rsc/regexp/regexp1.html)*.
+
+Este motor reemplaza por completo la dependencia de la librería estándar `re` de Python dentro de `main.py` para el análisis léxico, e implementa el compilador/simulador tanto en **C** como en **Python**.
+
+### 8.1. Características del Motor de Expresiones Regulares
+
+El motor implementa de manera nativa los siguientes elementos teóricos y prácticos:
+
+* **Conversión Infijo a Posfijo** (`re2post`): Re-escribe expresiones regulares infijas a una notación posfija de tokens (insertando el operador implícito de concatenación).
+* **Compilación a AFND**: Construye un AFND (Autómata Finito No Determinista) en memoria conectando fragmentos con punteros / referencias de transición.
+* **Simulación Thompson**: Rastrea los conjuntos de estados activos de manera simultánea en tiempo lineal $O(mn)$, evitando el costo exponencial $O(2^n)$ de los motores tradicionales de *backtracking*.
+* **Aserciones de Límites de Palabra** (`\b`): Evalúa el contexto dinámico de los caracteres para simular límites de palabras sin consumir caracteres físicos de la cadena.
+* **Clases y Rangos de Caracteres** (`[class]`, `[^class]`, `\d`, `\s`, `\w`, `.`): Soporte completo para las expresiones requeridas por la gramática de SMART-HOME.
+
+---
+
+### 8.2. Implementación del Lexer en Python (`regex.py` y `main.py`)
+
+En el archivo [regex.py](file:///C:/Users/lucad/OneDrive/Desktop/UTN/2do%20A%C3%B1o/SSL/regex.py) se encuentra la implementación portable en Python. Para adaptarla a las necesidades de tokenización del compilador:
+
+1. **Representación de Coincidencias**: Se utiliza un modelo de objetos como `LiteralMatcher`, `DigitMatcher`, `CharClassMatcher`, etc., que actúan como predicados callables dentro de los estados del AFND. Esto resuelve colisiones críticas entre caracteres literales escapados (como `\.`) y operadores lógicos.
+2. **Algoritmo Maximal Munch (Longest Match)**: Dado que el compilador debe extraer tokens de un flujo continuo de código, se añadió la función `regex.match_longest_prefix(start_state, sub_string, ignore_case=True)`. Esta función recorre el AFND hasta que no quedan estados activos y reporta la longitud máxima que ha alcanzado un estado de aceptación, lo cual permite al lexer priorizar las coincidencias más largas (por ejemplo, emparejar la palabra clave `IF` en vez de los caracteres individuales `I` y `F`).
+3. **Integración con el compilador**:
+   * En [main.py](file:///C:/Users/lucad/OneDrive/Desktop/UTN/2do%20A%C3%B1o/SSL/main.py) se importó `regex` en lugar de `re`.
+   * Se precompilan todos los patrones de `patrones` en AFND al iniciar el script.
+   * La función `lexer_smart_home` realiza un bucle sobre el código fuente llamando a `match_longest_prefix` y avanzando el puntero del analizador de forma determinista.
+
+---
+
+### 8.3. Uso de la Implementación de C (`regex.c`) para Testeo Rápido
+
+El archivo [regex.c](file:///C:/Users/lucad/OneDrive/Desktop/UTN/2do%20A%C3%B1o/SSL/regex.c) contiene la implementación de alto rendimiento adaptada a C estándar (sin dependencias POSIX para permitir compilación en Windows/MSVC).
+
+Además de la simulación Thompson AFND de tiempo lineal, incluye el algoritmo de **Construcción de AFD sobre la marcha (on-the-fly)**, almacenando en una caché de árbol binario los estados computados para lograr transiciones instantáneas $O(1)$ por carácter.
+
+#### Compilación de regex.c
+
+Para compilar la herramienta de pruebas en terminal, ejecute:
+
+```bash
+gcc -o regex.exe regex.c
+```
+
+#### Uso para Pruebas Rápidas de Terminal
+
+La consola permite compilar un patrón de expresión regular y probarlo inmediatamente contra múltiples cadenas:
+
+```bash
+# Sintaxis básica:
+# .\regex.exe [-n | -d] <expresión_regular> <cadenas_a_evaluar...>
+
+# Ejemplo de prueba 1: Simulación AFND (por defecto) con clases de caracteres
+.\regex.exe "[a-zA-Z0-9_]+" abc_123 a-b 123
+# Salida esperada:
+# abc_123
+# 123
+
+# Ejemplo de prueba 2: Aserción de límites de palabras (\b)
+.\regex.exe "\b(WHEN|IF)\b" WHEN WHEN1 1WHEN
+# Salida esperada:
+# WHEN
+
+# Ejemplo de prueba 3: Activación del Caché AFD (-d)
+.\regex.exe -d "a(bb)+a" abba abbbba aba
+# Salida esperada:
+# abba
+# abbbba
+```
+
+> [!NOTE]
+> Dado que la aserción de límite de palabra `\b` es contextual, requiere conocer la cadena de entrada completa en tiempo de ejecución. Si se invoca la caché DFA (`-d`) sobre una expresión regular que contenga `\b`, el programa detectará automáticamente la aserción y cambiará a la simulación NFA (`-n`) de manera segura, emitiendo un aviso informativo por pantalla.
+
+---
+
+### 8.4. Justificación Teórica: Simulación AFND vs. Caché AFD
+
+La decisión de implementar ambos enfoques (la simulación directa de un **Autómata Finito No Determinista - AFND** y la caché de un **Autómata Finito Determinista - AFD**) responde a un compromiso de diseño clásico en ciencias de la computación entre **tiempo de ejecución**, **consumo de memoria** y **soporte de características**:
+
+#### 1. Simulación AFND (Algoritmo de Thompson)
+
+* **Cómo funciona**: Mantiene de manera simultánea una lista con todos los estados activos en los que se encuentra el autómata. Por cada carácter del texto de entrada, calcula el siguiente conjunto de estados activos.
+* **Ventajas**:
+  * **Uso de memoria extremadamente bajo**: No guarda ninguna tabla de transiciones calculadas; solo requiere dos listas de estados de tamaño máximo proporcional al número de nodos del autómata ($O(m)$).
+  * **Soporte de aserciones contextuales (`\b`, `^`, `$`)**: Al evaluar el autómata dinámicamente paso a paso, puede verificar condiciones del entorno del carácter actual (como si el carácter previo es alfanumérico y el actual no) de manera directa y exacta.
+* **Desventajas**:
+  * Más lento en la práctica para textos largos, ya que por cada carácter leído se debe iterar sobre la lista de estados activos y seguir sus ramificaciones (costo por carácter de $O(m)$).
+
+#### 2. Caché AFD (Construcción sobre la marcha)
+
+* **Cómo funciona**: En lugar de recalcular el conjunto de estados AFND activos para un carácter en cada paso, el motor trata cada conjunto único de estados AFND como si fuera un único **estado del AFD**. Almacena estos estados y sus transiciones en una caché (árbol binario) a medida que son descubiertos.
+* **Ventajas**:
+  * **Velocidad máxima**: Una vez calculada una transición para un carácter en un estado determinado, las siguientes veces se procesa en tiempo constante $O(1)$ mediante un simple acceso a la tabla `next_state = current_state->next[char]`.
+* **Desventajas**:
+  * **Explosión de estados**: Teóricamente, un AFND de $n$ estados puede producir un AFD de hasta $2^n$ estados en el peor de los casos. Si bien en la práctica esto rara vez ocurre de forma completa, puede agotar la memoria en expresiones regulares complejas o textos largos.
+  * **Incompatibilidad con aserciones contextuales**: Dado que las transiciones de las aserciones (como `\b`) dependen del contexto de la cadena y no puramente del carácter de entrada, no es posible cachear de forma estática una transición de estado AFD basándose únicamente en el carácter actual.
+
+#### Resumen de Diseño
+
+Implementar ambos mecanismos proporciona **lo mejor de ambos mundos**:
+
+* Se usa la **Caché AFD** para expresiones regulares estándar (como números, textos o espacios en blanco) para lograr velocidades de escaneo de texto nativas y óptimas ($O(1)$ por carácter).
+* Se recurre a la **Simulación AFND** como respaldo seguro cuando la memoria se agota (pudiendo vaciar la caché del AFD y continuar) o cuando la expresión regular requiere aserciones contextuales avanzadas como límites de palabras (`\b`), garantizando la corrección matemática de la coincidencia en cualquier escenario.

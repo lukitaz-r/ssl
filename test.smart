@@ -1,5 +1,6 @@
 sensor_temp_1.temp_act = 45°C
 foco_sala.color = "rojo"
+sensor_movimiento_sala.color = "azul"
 
 // Regla de temperatura extrema
 WHEN sensor_temp_1.temp_act >= 35°C AND foco_sala.color == "azul" DO
