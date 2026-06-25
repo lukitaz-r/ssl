@@ -1,4 +1,4 @@
-import regex # type: ignore
+import regex
 import sys
 
 patrones = {
@@ -11,10 +11,16 @@ patrones = {
     'ATRIBUTO': r'\.(estado|brillo|color|modo|temp_obj|temp_act|posicion|hora|volumen|mute|fecha|mensaje|email_notif|activada)\b', 
     'COMPARACION': r'==|!=|>=|<=|>|<', 
     'ASIGNACION': r'=', 
-    'TEMPERATURA': r'-?\d+°C',
+    'TEMPERATURA': r'(-\d|-10|\d|[1-4]\d|50)°C',
+    'PORCENTAJE': r'(\d|[1-9]\d|100)%',
+    'ILUMINANCIA': r'(\d|[1-9]\d|[1-9]\d\d|1000)lux',
     'TEXTO': r'"[^"]*"', 
     'NUMERICO': r'\d+',
-    'ESPACIO': r'\s+'
+    'ESPACIO': r'\s+',
+    'HORA': r'([0-1]\d|2[0-3]):([0-5]\d)',
+    'TIEMPO': r'([0-1]\d|2[0-3])h|([0-5]\d)m|([0-5]\d)',
+    'FECHA': r'((0?\d|1\d|2\d|3[0-1])\/(0?\d|1[0-2])\/\d\d?\d?\d?)',
+    'EMAIL': r'[a-z0-9.]+@[a-zA-Z_]+?\.[a-zA-Z]{2,4}'
 }
 
 # Precompilar los patrones usando nuestro propio motor de regex
@@ -63,7 +69,6 @@ def lexer_smart_home(codigo: str) -> list:
             
         pos += longest_len
     return tokens
-
 class ParserSmartHome:
     def __init__(self, tokens, codigo=""):
         self.tokens = tokens
@@ -222,6 +227,43 @@ class ParserSmartHome:
             "acciones_else": acciones_else
         }
 
+    def condicion_temporal(self):
+        """<condicion_temporal> -> HORA | TIEMPO | FECHA"""
+        token = self.token_actual()
+        if token and token[0] == 'HORA':
+            return {"modo": "hora", "valor": self.consumir('HORA')[1]}
+        elif token and token[0] == 'TIEMPO':
+            return {"modo": "tiempo", "valor": self.consumir('TIEMPO')[1]}
+        elif token and token[0] == 'FECHA':
+            return {"modo": "fecha", "valor": self.consumir('FECHA')[1]}
+        else:
+            linea, columna = self.obtener_posicion_error()
+            if token:
+                raise SyntaxError(f"Error de Sintaxis en línea {linea}, columna {columna}: Se esperaba HORA, TIEMPO o FECHA después de EVERY, se encontró '{token[1]}'")
+            else:
+                raise SyntaxError(f"Error de Sintaxis en línea {linea}, columna {columna}: Se esperaba HORA, TIEMPO o FECHA después de EVERY al final del archivo")
+
+    def bloque_every(self):
+        """<bloque_every> -> EVERY <condicion_temporal> [AND <condicion_temporal>]* DO <lista_acciones> END"""
+        self.consumir('RESERVADA', 'EVERY')
+        
+        condiciones = [self.condicion_temporal()]
+        
+        # Permitir múltiples condiciones temporales encadenadas con AND
+        while self.token_actual() and self.token_actual()[0] == 'LOGICO' and self.token_actual()[1] == 'AND':
+            self.consumir('LOGICO', 'AND')
+            condiciones.append(self.condicion_temporal())
+        
+        self.consumir('RESERVADA', 'DO')
+        acciones = self.lista_acciones()
+        self.consumir('RESERVADA', 'END')
+        
+        return {
+            "tipo": "bloque_every",
+            "condiciones": condiciones,
+            "acciones": acciones
+        }
+
     def programa(self):
         """Punto de entrada: <programa> -> <instruccion> | <programa> <instruccion>"""
         instrucciones = []
@@ -230,8 +272,7 @@ class ParserSmartHome:
             if token[1] == 'WHEN':
                 instrucciones.append(self.bloque_when())
             elif token[1] == 'EVERY':
-                # instrucciones.append(self.bloque_every()) # (A implementar en el futuro)
-                pass 
+                instrucciones.append(self.bloque_every())
             elif token[1] == 'IF':
                 instrucciones.append(self.condicional())
             else:
@@ -318,6 +359,37 @@ def procesar_nodos(nodos):
                 <p><strong>Condición principal:</strong> {cond_html}</p>
                 <p><strong>Ejecutar el siguiente bloque:</strong></p>
                 <div style='padding-left: 20px; border-left: 3px solid #a9cce3;'>
+                    {acciones_html}
+                </div>
+            </div>
+            """
+
+        # 4. TRADUCCIÓN DE BLOQUE TEMPORAL (EVERY)
+        elif nodo["tipo"] == "bloque_every":
+            acciones_html = procesar_nodos(nodo["acciones"])
+            
+            condiciones_html = ""
+            for cond in nodo["condiciones"]:
+                modo = cond["modo"]
+                valor = cond["valor"]
+                if modo == "hora":
+                    descripcion = f"Todos los días a las <strong>{valor}</strong>"
+                elif modo == "tiempo":
+                    descripcion = f"Cada <strong>{valor}</strong>"
+                elif modo == "fecha":
+                    descripcion = f"El día <strong>{valor}</strong>"
+                else:
+                    descripcion = f"<strong>{valor}</strong>"
+                condiciones_html += f"<p><strong>• {modo.upper()}:</strong> {descripcion}</p>"
+            
+            html_local += f"""
+            <div style='background-color: #f5eef8; border: 2px solid #8e44ad; border-radius: 8px; padding: 15px; margin-bottom: 25px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);'>
+                <h3 style='color: #6c3483; margin-top: 0; border-bottom: 1px solid #d2b4de; padding-bottom: 5px;'>
+                    🕐 Programación Temporal (EVERY)
+                </h3>
+                {condiciones_html}
+                <p><strong>Ejecutar el siguiente bloque:</strong></p>
+                <div style='padding-left: 20px; border-left: 3px solid #d2b4de;'>
                     {acciones_html}
                 </div>
             </div>

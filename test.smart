@@ -11,5 +11,24 @@ WHEN sensor_temp_1.temp_act >= 35°C AND foco_sala.color == "azul" DO
     ELSE
         persiana_sala.estado = OFF
         alarma_casa.estado = ON
+        foco_sala.estado = OFF
+        alarma_casa.estado = ON
     END
+END
+
+// Ejemplo EVERY por Hora: apagar luces a las 23:00
+EVERY 23:00 DO
+    foco_sala.estado = OFF
+    persiana_sala.estado = OFF
+END
+
+// Ejemplo EVERY por Tiempo: revisar temperatura cada 30m
+EVERY 30m DO
+    alarma_casa.estado = ON
+END
+
+// Ejemplo EVERY por Fecha: activar decoración navideña
+EVERY 25/12/2026 and 12:00 DO
+    foco_sala.color = "rojo"
+    altavoz_sala.estado = ON
 END
